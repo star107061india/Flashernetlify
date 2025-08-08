@@ -1,95 +1,87 @@
-// File: netlify/functions/submit-batch-transactions.js
+// File: /netlify/functions/submit-batch-transactions.js
 
-const { Keypair, Horizon, Operation, TransactionBuilder, Asset } = require('stellar-sdk');
+const StellarSdk = require('stellar-sdk');
 const { mnemonicToSeedSync } = require('bip39');
 const { derivePath } = require('ed25519-hd-key');
 const axios = require('axios');
 
-// सर्वर कॉन्फ़िगरेशन, टाइमआउट बढ़ाया गया
-const server = new Horizon.Server("https://api.mainnet.minepi.com", {
-    httpClient: axios.create({ timeout: 60000 }) // बैच के लिए टाइमआउट 60 सेकंड कर दिया है
+// सर्वर कॉन्फ़िगरेशन
+const server = new StellarSdk.Server("https://api.mainnet.minepi.com", {
+    httpClient: axios.create({ timeout: 60000 })
 });
 
 // मेमोनिक से कीपेयर बनाने का हेल्पर फंक्शन
 const createKeypairFromMnemonic = (mnemonic) => {
     try {
-        return Keypair.fromRawEd25519Seed(derivePath("m/44'/314159'/0'", mnemonicToSeedSync(mnemonic).toString('hex')).key);
+        const seed = mnemonicToSeedSync(mnemonic);
+        const derivedSeed = derivePath("m/44'/314159'/0'", seed.toString('hex'));
+        return StellarSdk.Keypair.fromRawEd25519Seed(derivedSeed.key);
     } catch (e) {
-        throw new Error("Invalid keyphrase. Please check for typos or extra spaces.");
+        throw new Error("Invalid keyphrase.");
     }
 };
 
 exports.handler = async (event) => {
-    if (event.httpMethod !== 'POST') return { statusCode: 405, body: 'Method Not Allowed' };
+    // केवल POST रिक्वेस्ट को स्वीकार करें
+    if (event.httpMethod !== 'POST') {
+        return { statusCode: 405, body: JSON.stringify({ success: false, error: 'Method Not Allowed' }) };
+    }
 
     try {
-        // नया: अब हम 'count' भी लेंगे, यानी कितने ट्रांजैक्शन करने हैं
         const { senderMnemonic, receiverAddress, amount, count = 1 } = JSON.parse(event.body);
 
-        if (count > 100) { // एक सीमा निर्धारित करें
-             throw new Error("Cannot process more than 100 transactions at a time.");
+        // इनपुट का वैलिडेशन
+        if (!senderMnemonic || !receiverAddress || !amount || !count) {
+             return { statusCode: 400, body: JSON.stringify({ success: false, error: "Missing required parameters." }) };
+        }
+        if (count > 100) {
+             return { statusCode: 400, body: JSON.stringify({ success: false, error: "Cannot process more than 100 transactions." }) };
         }
 
         const senderKeypair = createKeypairFromMnemonic(senderMnemonic);
-
-        // >> मुख्य लॉजिक यहाँ से शुरू होता है <<
-
-        // 1. भेजने वाले का अकाउंट सिर्फ एक बार लोड करें
         const sourceAccount = await server.loadAccount(senderKeypair.publicKey());
         const fee = await server.fetchBaseFee();
         
         const transactionPromises = [];
 
-        // 2. लूप चलाकर सभी ट्रांजैक्शन तैयार करें
+        // लूप चलाकर सभी ट्रांजैक्शन तैयार करें
         for (let i = 0; i < count; i++) {
-            // 3. हर ट्रांजैक्शन के लिए सीक्वेंस नंबर को 1 से बढ़ाएं
-            // BigInt का उपयोग करना सुरक्षित है ताकि बड़ी संख्याओं में कोई समस्या न हो
             const sequenceForThisTx = (BigInt(sourceAccount.sequence) + BigInt(i + 1)).toString();
-
-            const tx = new TransactionBuilder(sourceAccount, {
+            const tx = new StellarSdk.TransactionBuilder(sourceAccount, {
                 fee,
                 networkPassphrase: "Pi Network",
             })
-            .addOperation(Operation.payment({
+            .addOperation(StellarSdk.Operation.payment({
                 destination: receiverAddress,
-                asset: Asset.native(),
-                amount: amount.toString(), // हर ट्रांजैक्शन के लिए राशि
+                asset: StellarSdk.Asset.native(),
+                amount: amount.toString(),
             }))
-            .setSequence(sequenceForThisTx) // <<< यह बहुत महत्वपूर्ण है
+            .setSequence(sequenceForThisTx)
             .setTimeout(60)
             .build();
-
-            tx.sign(senderKeypair);
             
-            // ट्रांजैक्शन को सबमिट करने का प्रॉमिस बनाएं और ऐरे में डालें
+            tx.sign(senderKeypair);
             transactionPromises.push(server.submitTransaction(tx));
         }
 
-        console.log(`Submitting a batch of ${count} transactions...`);
-
-        // 4. Promise.allSettled से सभी को एक साथ भेजें
+        // सभी को एक साथ भेजें
         const results = await Promise.allSettled(transactionPromises);
-
-        // परिणामों को प्रोसेस करें
+        
         const successful_transactions = [];
         const failed_transactions = [];
 
         results.forEach((result, index) => {
+            const sequence = (BigInt(sourceAccount.sequence) + BigInt(index + 1)).toString();
             if (result.status === 'fulfilled') {
-                successful_transactions.push({
-                    sequence: (BigInt(sourceAccount.sequence) + BigInt(index + 1)).toString(),
-                    hash: result.value.hash,
-                    response: result.value
-                });
+                successful_transactions.push({ sequence, hash: result.value.hash });
             } else {
-                let errorMessage = result.reason.message;
-                if (result.reason.response && result.reason.response.data && result.reason.response.data.extras) {
+                let errorMessage = "Transaction failed.";
+                if (result.reason?.response?.data?.extras?.result_codes) {
                     errorMessage = JSON.stringify(result.reason.response.data.extras.result_codes);
+                } else if (result.reason?.message) {
+                    errorMessage = result.reason.message;
                 }
-                failed_transactions.push({
-                    sequence: (BigInt(sourceAccount.sequence) + BigInt(index + 1)).toString(),
-                    error: errorMessage
-                });
+                failed_transactions.push({ sequence, error: errorMessage });
             }
         });
         
@@ -97,17 +89,38 @@ exports.handler = async (event) => {
             statusCode: 200,
             body: JSON.stringify({
                 success: true,
-                message: `Batch processing complete. ${successful_transactions.length} succeeded, ${failed_transactions.length} failed.`,
+                message: `Batch complete. ${successful_transactions.length} succeeded, ${failed_transactions.length} failed.`,
                 successful_transactions,
                 failed_transactions
             })
         };
 
     } catch (error) {
-        console.error("Error in batch transaction:", error);
+        let errorMessage = error.message;
+        if (error.response && error.response.data) {
+             errorMessage = error.response.data.title || error.response.data.detail || errorMessage;
+        }
+
         return {
-            statusCode: 200, // फ्रंटएंड पर एरर को ठीक से दिखाने के लिए 200 भेजें
-            body: JSON.stringify({ success: false, error: error.message })
+            statusCode: 500, // सर्वर एरर के लिए 500 कोड का उपयोग करें
+            body: JSON.stringify({ success: false, error: errorMessage })
         };
     }
-};
+};```
+
+---
+
+### कदम 3: डिप्लॉय करें
+
+1.  **निर्भरताएँ (Dependencies):** सुनिश्चित करें कि आपकी `package.json` फ़ाइल में ये निर्भरताएँ हैं। अपने टर्मिनल में चलाएँ:
+    ```bash
+    npm install stellar-sdk bip39 ed25519-hd-key axios
+    ```
+
+2.  **नेटलिफाई सेटिंग्स:** अपनी नेटलिफाई साइट की **Build settings** में जाएँ और सुनिश्चित करें कि:
+    *   **Build command:** इसे **खाली छोड़ दें** (क्योंकि हमें कुछ भी बिल्ड नहीं करना है)।
+    *   **Publish directory:** इसे **`.`** (सिर्फ एक डॉट) पर सेट करें या उस फोल्डर का नाम दें जिसमें आपकी `index.html` है।
+
+3.  **डिप्लॉय:** अपने कोड को GitHub पर पुश करें और नेटलिफाई पर डिप्लॉय करें।
+
+अब आपकी साइट पर एक सरल, तेज और बिना किसी एरर वाला बॉट होगा जो एक साथ कई ट्रांजैक्शन भेज सकता है।
