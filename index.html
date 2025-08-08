@@ -160,298 +160,298 @@
     </div>
 
     <script>
-        // Global state
-        let isProcessing = false;
-        let lockedBalancesCache = [];
+        // --- Global State ---
+let isProcessing = false;
+let shouldStop = false;
+let lockedBalancesCache = [];
 
-        // --- Tab Switching Logic ---
-        const tabDiscover = document.getElementById('tab-discover');
-        const tabTransfer = document.getElementById('tab-transfer');
-        const contentDiscover = document.getElementById('content-discover');
-        const contentTransfer = document.getElementById('content-transfer');
+// --- Tab Switching Logic ---
+const tabDiscover = document.getElementById('tab-discover');
+const tabTransfer = document.getElementById('tab-transfer');
+const contentDiscover = document.getElementById('content-discover');
+const contentTransfer = document.getElementById('content-transfer');
 
-        function switchTab(tabName) {
-            if (tabName === 'discover') {
-                tabDiscover.classList.add('active');
-                tabTransfer.classList.remove('active');
-                contentDiscover.classList.add('active');
-                contentTransfer.classList.remove('active');
-            } else {
-                tabTransfer.classList.add('active');
-                tabDiscover.classList.remove('active');
-                contentTransfer.classList.add('active');
-                contentDiscover.classList.remove('active');
-            }
-        }
-        tabDiscover.addEventListener('click', () => switchTab('discover'));
-        tabTransfer.addEventListener('click', () => switchTab('transfer'));
+function switchTab(tabName) {
+    if (tabName === 'discover') {
+        tabDiscover.classList.add('active');
+        tabTransfer.classList.remove('active');
+        contentDiscover.classList.add('active');
+        contentTransfer.classList.remove('active');
+    } else {
+        tabTransfer.classList.add('active');
+        tabDiscover.classList.remove('active');
+        contentTransfer.classList.add('active');
+        contentDiscover.classList.remove('active');
+    }
+}
+tabDiscover.addEventListener('click', () => switchTab('discover'));
+tabTransfer.addEventListener('click', () => switchTab('transfer'));
 
-        // --- UI Element References ---
-        const operationTypeSelect = document.getElementById('operation-type');
-        const feeTypeSelect = document.getElementById('fee-type');
-        const senderGroup = document.getElementById('sender-group');
-        const sponsorGroup = document.getElementById('sponsor-group');
-        const lockedBalanceGroup = document.getElementById('locked-balance-group');
-        const withdrawalAmountGroup = document.getElementById('withdrawal-amount-group');
-        const batchSizeGroup = document.getElementById('batch-size-group');
-        const claimableIdSelect = document.getElementById('claimableId');
+// --- UI Element References ---
+const operationTypeSelect = document.getElementById('operation-type');
+const feeTypeSelect = document.getElementById('fee-type');
+const senderGroup = document.getElementById('sender-group');
+const sponsorGroup = document.getElementById('sponsor-group');
+const lockedBalanceGroup = document.getElementById('locked-balance-group');
+const withdrawalAmountGroup = document.getElementById('withdrawal-amount-group');
+const batchSizeGroup = document.getElementById('batch-size-group');
+const claimableIdSelect = document.getElementById('claimableId');
+const noLockedBalanceMsg = document.getElementById('no-locked-balance-msg');
+const discoverBtn = document.getElementById('discover-btn');
+const discoverKeyphraseInput = document.getElementById('discover-keyphrase');
+const lockedCoinsListEl = document.getElementById('locked-coins-list');
+const discoverMessageEl = document.getElementById('discover-message');
+const submitBtn = document.getElementById('submitBtn');
+const cancelBtn = document.getElementById('cancelBtn');
+const messageBox = document.getElementById('message-box');
+const attemptsContainer = document.getElementById('attempts-container');
+const attemptsBox = document.getElementById('attempts-box');
+const attemptsCounter = document.getElementById('attempts-counter');
+const senderMnemonicInput = document.getElementById('senderMnemonic');
+const sponsorMnemonicInput = document.getElementById('sponsorMnemonic');
+const withdrawalAmountInput = document.getElementById('withdrawalAmount');
+const transactionCountInput = document.getElementById('transactionCount');
+const receiverAddressInput = document.getElementById('receiverAddress');
+const maxAttemptsInput = document.getElementById('max-attempts');
+
+// --- Dynamic UI Logic ---
+function updateFormVisibility() {
+    const opType = operationTypeSelect.value;
+    const feeType = feeTypeSelect.value;
+    lockedBalanceGroup.classList.toggle('hidden', opType !== 'claim_and_transfer');
+    withdrawalAmountGroup.classList.toggle('hidden', opType !== 'withdrawal');
+    batchSizeGroup.classList.toggle('hidden', opType !== 'withdrawal');
+    sponsorGroup.classList.toggle('hidden', feeType !== 'SPONSOR_PAYS');
+}
+operationTypeSelect.addEventListener('change', updateFormVisibility);
+feeTypeSelect.addEventListener('change', updateFormVisibility);
+
+// --- Discover Locked Coins Logic ---
+discoverBtn.addEventListener('click', async () => {
+    const mnemonic = discoverKeyphraseInput.value;
+    if (!mnemonic) {
+        showDiscoverMessage("Please enter a keyphrase.", true);
+        return;
+    }
+    setButtonLoading(discoverBtn, true);
+    showDiscoverMessage("Scanning wallet...", false, true);
+    try {
+        const response = await fetch('/.netlify/functions/getClaimableBalances', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ mnemonic })
+        });
+        const result = await response.json();
+        if (!response.ok || !result.success) throw new Error(result.error || `Server error ${response.status}`);
         
-        // --- Dynamic UI Logic ---
-        function updateFormVisibility() {
-            const opType = operationTypeSelect.value;
-            const feeType = feeTypeSelect.value;
+        lockedBalancesCache = result.balances;
+        displayLockedCoins(result.balances);
+        updateClaimableBalanceDropdown(result.balances);
+        showDiscoverMessage(`Found ${result.balances.length} locked balance(s).`, false);
+    } catch (err) {
+        showDiscoverMessage(`Error: ${err.message}`, true);
+    } finally {
+        setButtonLoading(discoverBtn, false);
+    }
+});
 
-            lockedBalanceGroup.classList.toggle('hidden', opType !== 'claim_and_transfer');
-            withdrawalAmountGroup.classList.toggle('hidden', opType !== 'withdrawal');
-            batchSizeGroup.classList.toggle('hidden', opType !== 'withdrawal');
+function showDiscoverMessage(message, isError, isInfo = false) {
+    const type = isError ? 'error' : (isInfo ? 'info' : 'success');
+    discoverMessageEl.innerHTML = `<div class="message-${type}">${message}</div>`;
+}
 
-            sponsorGroup.classList.toggle('hidden', feeType !== 'SPONSOR_PAYS');
-        }
+function displayLockedCoins(balances) {
+    lockedCoinsListEl.innerHTML = '';
+    if (balances.length === 0) {
+        lockedCoinsListEl.innerHTML = '<p style="text-align: center; color: var(--slate-400);">No locked coins found.</p>';
+    } else {
+        balances.forEach((balance, index) => {
+            const item = document.createElement('div');
+            item.className = 'coin-item';
+            item.innerHTML = `<div><p>Balance #${index + 1}</p><p class="amount">${balance.amount} PI</p></div><button class="copy-btn" data-id="${balance.id}">Copy ID</button>`;
+            lockedCoinsListEl.appendChild(item);
+        });
+    }
+    lockedCoinsListEl.style.display = 'block';
+    document.querySelectorAll('.copy-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            navigator.clipboard.writeText(btn.dataset.id);
+            showDiscoverMessage('Balance ID copied!', false, true);
+        });
+    });
+}
+
+function updateClaimableBalanceDropdown(balances) {
+    claimableIdSelect.innerHTML = '';
+    if (balances.length > 0) {
+        balances.forEach((balance, index) => {
+            const option = document.createElement('option');
+            option.value = balance.id;
+            option.textContent = `Balance #${index + 1} (${balance.amount} PI)`;
+            claimableIdSelect.appendChild(option);
+        });
+        claimableIdSelect.style.display = 'block';
+        noLockedBalanceMsg.style.display = 'none';
+    } else {
+        claimableIdSelect.style.display = 'none';
+        noLockedBalanceMsg.style.display = 'block';
+    }
+}
+
+// --- Initiate Transfer Logic (Updated for fast retry) ---
+cancelBtn.addEventListener('click', () => {
+    shouldStop = true;
+    showMessage("Cancelling after this batch...", 'error');
+});
+
+submitBtn.addEventListener('click', async () => {
+    shouldStop = false;
+    isProcessing = true;
+    updateUIAfterStart();
+
+    const maxAttempts = parseInt(maxAttemptsInput.value, 10);
+    const isInfinite = maxAttempts === 0;
+
+    for (let attempt = 1; (isInfinite || attempt <= maxAttempts); attempt++) {
+        if (shouldStop) break;
+
+        attemptsCounter.textContent = `Attempt Cycle #${attempt} of ${isInfinite ? '∞' : maxAttempts}`;
+        const opType = operationTypeSelect.value;
         
-        operationTypeSelect.addEventListener('change', updateFormVisibility);
-        feeTypeSelect.addEventListener('change', updateFormVisibility);
-        
-        // --- Discover Locked Coins Logic ---
-        const discoverBtn = document.getElementById('discover-btn');
-        const discoverKeyphraseInput = document.getElementById('discover-keyphrase');
-        const lockedCoinsListEl = document.getElementById('locked-coins-list');
-        const discoverMessageEl = document.getElementById('discover-message');
-        const noLockedBalanceMsg = document.getElementById('no-locked-balance-msg');
+        // --- FAST RETRY FOR WITHDRAWAL ---
+        if (opType === 'withdrawal') {
+            const batchSize = parseInt(transactionCountInput.value, 10);
+            const promises = [];
 
-        discoverBtn.addEventListener('click', async () => {
-            const mnemonic = discoverKeyphraseInput.value;
-            if (!mnemonic) {
-                showDiscoverMessage("Please enter a keyphrase.", true);
-                return;
-            }
-
-            setButtonLoading(discoverBtn, true);
-            showDiscoverMessage("Scanning wallet...", false, true);
+            const body = {
+                senderMnemonic: senderMnemonicInput.value,
+                receiverAddress: receiverAddressInput.value,
+                amount: withdrawalAmountInput.value,
+                count: batchSize // We send the whole batch size to the backend
+            };
+            
+            // The backend handles creating `batchSize` transactions in parallel.
+            // We only make ONE API call for the whole batch.
+            const promise = fetch('/.netlify/functions/submit-batch-transactions', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body)
+            }).then(res => res.json());
 
             try {
-                // IMPORTANT: You MUST create a Netlify function named 'getClaimableBalances'
-                // that takes a `mnemonic` and returns `{ success: true, balances: [...] }`
-                const response = await fetch('/.netlify/functions/getClaimableBalances', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ mnemonic })
-                });
-
-                const result = await response.json();
-
-                if (!response.ok || !result.success) {
-                    throw new Error(result.error || `Server responded with status ${response.status}`);
-                }
-                
-                lockedBalancesCache = result.balances;
-                displayLockedCoins(result.balances);
-                updateClaimableBalanceDropdown(result.balances);
-                showDiscoverMessage(`Found ${result.balances.length} locked balance(s).`, false);
-
+                const result = await promise;
+                logBatchAttempt(attempt, result);
             } catch (err) {
-                showDiscoverMessage(`Error: ${err.message}`, true);
-            } finally {
-                setButtonLoading(discoverBtn, false);
+                 logBatchAttempt(attempt, { success: false, error: err.message });
             }
-        });
-        
-        function showDiscoverMessage(message, isError, isInfo = false) {
-            const type = isError ? 'error' : (isInfo ? 'info' : 'success');
-            discoverMessageEl.innerHTML = `<div class="message-${type}">${message}</div>`;
-        }
-        
-        function displayLockedCoins(balances) {
-            lockedCoinsListEl.innerHTML = '';
-            if (balances.length === 0) {
-                lockedCoinsListEl.innerHTML = '<p style="text-align: center; color: var(--slate-400);">No locked coins found for this account.</p>';
-            } else {
-                balances.forEach((balance, index) => {
-                    const item = document.createElement('div');
-                    item.className = 'coin-item';
-                    item.innerHTML = `
-                        <div>
-                            <p>Balance #${index + 1}</p>
-                            <p class="amount">${balance.amount} PI</p>
-                        </div>
-                        <button class="copy-btn" data-id="${balance.id}">Copy ID</button>
-                    `;
-                    lockedCoinsListEl.appendChild(item);
+
+        } else { // --- SINGLE ATTEMPT FOR CLAIM & TRANSFER ---
+            const body = {
+                senderMnemonic: senderMnemonicInput.value,
+                feeType: feeTypeSelect.value,
+                sponsorMnemonic: sponsorMnemonicInput.value,
+                receiverAddress: receiverAddressInput.value,
+                claimableId: claimableIdSelect.value,
+                amount: lockedBalancesCache.find(b => b.id === claimableIdSelect.value)?.amount || '0'
+            };
+             if (!body.claimableId) {
+                showMessage("No locked balance selected for transfer.", 'error');
+                shouldStop = true; break;
+            }
+
+            try {
+                const response = await fetch('/.netlify/functions/submitTransaction', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
                 });
-            }
-            lockedCoinsListEl.style.display = 'block';
-            document.querySelectorAll('.copy-btn').forEach(btn => {
-                btn.addEventListener('click', () => {
-                    navigator.clipboard.writeText(btn.dataset.id);
-                    showDiscoverMessage('Balance ID copied!', false, true);
-                });
-            });
-        }
-        
-        function updateClaimableBalanceDropdown(balances) {
-            claimableIdSelect.innerHTML = '';
-            if (balances.length > 0) {
-                balances.forEach((balance, index) => {
-                    const option = document.createElement('option');
-                    option.value = balance.id;
-                    option.textContent = `Balance #${index + 1} (${balance.amount} PI)`;
-                    claimableIdSelect.appendChild(option);
-                });
-                claimableIdSelect.style.display = 'block';
-                noLockedBalanceMsg.style.display = 'none';
-            } else {
-                claimableIdSelect.style.display = 'none';
-                noLockedBalanceMsg.style.display = 'block';
-            }
-        }
-
-        // --- Initiate Transfer Logic ---
-        const submitBtn = document.getElementById('submitBtn');
-        const cancelBtn = document.getElementById('cancelBtn');
-        const messageBox = document.getElementById('message-box');
-        const attemptsContainer = document.getElementById('attempts-container');
-        const attemptsBox = document.getElementById('attempts-box');
-        const attemptsCounter = document.getElementById('attempts-counter');
-
-        const senderMnemonicInput = document.getElementById('senderMnemonic');
-        const sponsorMnemonicInput = document.getElementById('sponsorMnemonic');
-        const withdrawalAmountInput = document.getElementById('withdrawalAmount');
-        const transactionCountInput = document.getElementById('transactionCount');
-        const receiverAddressInput = document.getElementById('receiverAddress');
-        const maxAttemptsInput = document.getElementById('max-attempts');
-        
-        let shouldStop = false;
-        
-        cancelBtn.addEventListener('click', () => {
-            shouldStop = true;
-            showMessage("Cancelling after this attempt...", true);
-        });
-
-        submitBtn.addEventListener('click', async () => {
-            shouldStop = false;
-            isProcessing = true;
-            
-            updateUIAfterStart();
-
-            const maxAttempts = parseInt(maxAttemptsInput.value, 10);
-            const isInfinite = maxAttempts === 0;
-
-            for (let attempt = 1; isInfinite || attempt <= maxAttempts; attempt++) {
-                if (shouldStop) {
-                    showMessage("Process cancelled by user.", true);
-                    break;
+                const result = await response.json();
+                logAttempt(attempt, result);
+                if (result.success) {
+                    showMessage("Transfer successful!", 'success');
+                    shouldStop = true;
                 }
-
-                attemptsCounter.textContent = `Attempt ${attempt} of ${isInfinite ? '∞' : maxAttempts}`;
-                
-                const opType = operationTypeSelect.value;
-                const body = {
-                    operation: opType,
-                    senderMnemonic: senderMnemonicInput.value,
-                    feeType: feeTypeSelect.value,
-                    sponsorMnemonic: sponsorMnemonicInput.value,
-                    receiverAddress: receiverAddressInput.value,
-                };
-                
-                if (opType === 'withdrawal') {
-                    body.amount = withdrawalAmountInput.value;
-                    body.count = parseInt(transactionCountInput.value, 10);
-                } else { // claim_and_transfer
-                    const selectedBalanceId = claimableIdSelect.value;
-                    if (!selectedBalanceId) {
-                         showMessage("No locked balance selected for transfer.", true);
-                         shouldStop = true; // Stop the loop
-                         break;
-                    }
-                    const balance = lockedBalancesCache.find(b => b.id === selectedBalanceId);
-                    body.claimableId = selectedBalanceId;
-                    body.amount = balance ? balance.amount : '0';
-                    body.count = 1; // Claim and transfer is always 1 op
-                }
-
-                try {
-                    const response = await fetch(
-                        opType === 'withdrawal' ? '/.netlify/functions/submit-batch-transactions' : '/.netlify/functions/submitTransaction', { // Use different endpoints
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(body)
-                    });
-                    
-                    const result = await response.json();
-                    logAttempt(attempt, result);
-                    
-                    if (result.success && opType === 'claim_and_transfer') {
-                         showMessage("Transfer successful!", false);
-                         shouldStop = true;
-                    }
-                    
-                } catch (err) {
-                    logAttempt(attempt, { success: false, error: err.message });
-                }
-                
-                await new Promise(resolve => setTimeout(resolve, 1000)); // 1-second delay between attempts
-            }
-            
-            isProcessing = false;
-            updateUIAfterStop();
-        });
-        
-        function updateUIAfterStart() {
-            submitBtn.classList.add('hidden');
-            cancelBtn.classList.remove('hidden');
-            attemptsContainer.classList.remove('hidden');
-            messageBox.classList.add('hidden');
-            attemptsBox.innerHTML = '';
-        }
-
-        function updateUIAfterStop() {
-            submitBtn.classList.remove('hidden');
-            cancelBtn.classList.add('hidden');
-            if (shouldStop) {
-                showMessage("Process stopped.", true);
-            } else {
-                showMessage("Max attempts reached.", false, true);
+            } catch (err) {
+                logAttempt(attempt, { success: false, error: err.message });
             }
         }
         
-        function logAttempt(attemptNum, result) {
-            const logEntry = document.createElement('p');
-            if (result.success) {
-                logEntry.className = 'log-success';
-                let successMsg = `Attempt #${attemptNum}: SUCCESS.`;
-                if(result.successful_transactions) {
-                   successMsg += ` ${result.successful_transactions.length} successful, ${result.failed_transactions.length} failed.`;
-                } else if (result.response && result.response.hash) {
-                   successMsg += ` Hash: ${result.response.hash.substring(0, 10)}...`;
-                }
-                logEntry.textContent = successMsg;
-            } else {
-                logEntry.className = 'log-fail';
-                logEntry.textContent = `Attempt #${attemptNum}: FAILED - ${result.error || 'Unknown error'}`;
-            }
-            attemptsBox.prepend(logEntry);
+        if (!shouldStop) {
+            await new Promise(resolve => setTimeout(resolve, 1000)); // Delay between attempts/batches
         }
+    }
+    
+    isProcessing = false;
+    updateUIAfterStop();
+});
 
-        function setButtonLoading(button, isLoading) {
-            const btnText = button.querySelector('.btn-text');
-            if (isLoading) {
-                button.disabled = true;
-                if (btnText) btnText.style.display = 'none';
-                if (!button.querySelector('.spinner')) {
-                    const spinner = document.createElement('div');
-                    spinner.className = 'spinner';
-                    button.prepend(spinner);
-                }
-            } else {
-                button.disabled = false;
-                if (btnText) btnText.style.display = 'inline';
-                const spinner = button.querySelector('.spinner');
-                if (spinner) spinner.remove();
-            }
+// --- UI Helper Functions ---
+function updateUIAfterStart() {
+    submitBtn.classList.add('hidden');
+    cancelBtn.classList.remove('hidden');
+    attemptsContainer.classList.remove('hidden');
+    messageBox.style.display = 'none';
+    attemptsBox.innerHTML = '';
+}
+
+function updateUIAfterStop() {
+    submitBtn.classList.remove('hidden');
+    cancelBtn.classList.add('hidden');
+    if (shouldStop) {
+        showMessage("Process stopped.", 'error');
+    } else {
+        showMessage("Max attempts reached.", 'info');
+    }
+}
+
+function logAttempt(attemptNum, result) {
+    const logEntry = document.createElement('p');
+    if (result.success) {
+        logEntry.className = 'log-success';
+        logEntry.textContent = `Attempt #${attemptNum}: SUCCESS - Hash: ${result.response?.hash?.substring(0, 10) || 'N/A'}...`;
+    } else {
+        logEntry.className = 'log-fail';
+        logEntry.textContent = `Attempt #${attemptNum}: FAILED - ${result.error || 'Unknown error'}`;
+    }
+    attemptsBox.prepend(logEntry);
+}
+
+function logBatchAttempt(attemptNum, result) {
+    const logEntry = document.createElement('p');
+    if (result.success) {
+        logEntry.className = 'log-success';
+        logEntry.textContent = `Batch #${attemptNum}: ${result.message}`;
+    } else {
+        logEntry.className = 'log-fail';
+        logEntry.textContent = `Batch #${attemptNum}: FAILED - ${result.error || 'Unknown batch error'}`;
+    }
+    attemptsBox.prepend(logEntry);
+}
+
+function setButtonLoading(button, isLoading) {
+    const btnText = button.querySelector('.btn-text');
+    if (isLoading) {
+        button.disabled = true;
+        if (btnText) btnText.style.display = 'none';
+        if (!button.querySelector('.spinner')) {
+            const spinner = document.createElement('div');
+            spinner.className = 'spinner';
+            button.prepend(spinner);
         }
-        
-        // Initial UI setup
-        updateFormVisibility();
-        updateClaimableBalanceDropdown([]);
+    } else {
+        button.disabled = false;
+        if (btnText) btnText.style.display = 'inline';
+        button.querySelector('.spinner')?.remove();
+    }
+}
+
+function showMessage(text, type) {
+    messageBox.textContent = text;
+    messageBox.className = `message-${type}`;
+    messageBox.style.display = 'block';
+}
+
+// Initial UI setup
+updateFormVisibility();
+updateClaimableBalanceDropdown([]);
     </script>
 </body>
 </html>
