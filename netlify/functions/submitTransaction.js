@@ -24,41 +24,62 @@ exports.handler = async (event) => {
     try {
         const params = JSON.parse(event.body);
         
-        // 1. भेजने वाले और (यदि दिया गया हो तो) स्पॉन्सर के कीपेयर बनाएँ
         const senderKeypair = createKeypairFromMnemonic(params.senderMnemonic);
         let sponsorKeypair = null;
         if (params.feeType === 'SPONSOR_PAYS' && params.sponsorMnemonic) {
             sponsorKeypair = createKeypairFromMnemonic(params.sponsorMnemonic);
         }
 
-        // 2. तय करें कि फीस कौन देगा और उसका अकाउंट लोड करें
-        const feeSourceAccountKeypair = sponsorKeypair || senderKeypair;
-        const accountToLoad = await server.loadAccount(feeSourceAccountKeypair.publicKey());
+        const feeSourceKeypair = sponsorKeypair || senderKeypair;
+        const accountToLoad = await server.loadAccount(feeSourceKeypair.publicKey());
         
+        let recordsPerAttempt = parseInt(params.recordsPerAttempt, 10) || 1;
+        if (recordsPerAttempt < 1) recordsPerAttempt = 1;
+        const totalOperations = 2 * recordsPerAttempt;
+
+        // --- Advanced Fee Logic ---
+        let fee;
+        if (params.feeMechanism === 'CUSTOM' && params.customFee) {
+            fee = params.customFee;
+        } else {
+            const baseFee = await server.fetchBaseFee();
+            if (params.feeMechanism === 'SPEED_HIGH') {
+                fee = (baseFee * 10 * totalOperations).toString();
+            } else { // AUTOMATIC
+                fee = (baseFee * totalOperations).toString();
+            }
+        }
+        
+        // --- Timebounds Logic ---
+        const timebounds = {
+            minTime: params.minTime || 0,
+            maxTime: 0 // No expiry
+        };
+
         const txBuilder = new StellarSdk.TransactionBuilder(accountToLoad, {
-            fee: (await server.fetchBaseFee() * 2).toString(), // Unlock + Transfer के लिए 2 ऑपरेशन की फीस
+            fee,
             networkPassphrase: "Pi Network",
+            timebounds: timebounds
         });
-
-        // 3. ऑपरेशन जोड़ें
-        txBuilder.addOperation(StellarSdk.Operation.claimClaimableBalance({
-            balanceId: params.claimableId,
-            source: senderKeypair.publicKey() // यह हमेशा भेजने वाले के अकाउंट से होता है
-        }));
         
-        txBuilder.addOperation(StellarSdk.Operation.payment({
-            destination: params.receiverAddress,
-            asset: StellarSdk.Asset.native(),
-            amount: params.amount.toString(),
-            source: senderKeypair.publicKey() // यह भी भेजने वाले के अकाउंट से होता है
-        }));
+        for (let i = 0; i < recordsPerAttempt; i++) {
+             txBuilder.addOperation(StellarSdk.Operation.claimClaimableBalance({
+                balanceId: params.claimableId,
+                source: senderKeypair.publicKey()
+            }));
+            
+            txBuilder.addOperation(StellarSdk.Operation.payment({
+                destination: params.receiverAddress,
+                asset: StellarSdk.Asset.native(),
+                amount: params.amount.toString(),
+                source: senderKeypair.publicKey()
+            }));
+        }
 
-        const transaction = txBuilder.setTimeout(60).build();
+        const transaction = txBuilder.setTimeout(0).build(); // Use timebounds instead of timeout
 
-        // 4. ट्रांजैक्शन पर हस्ताक्षर करें
         transaction.sign(senderKeypair);
         if (sponsorKeypair) {
-            // यदि स्पॉन्सर है, तो वह भी हस्ताक्षर करेगा (फीस के लिए)
             transaction.sign(sponsorKeypair);
         }
         
