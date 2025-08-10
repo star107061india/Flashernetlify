@@ -327,13 +327,15 @@
             showMessage(elements.messageBox, "Cancelling...", 'error');
         }
 
+        // --- MODIFIED FUNCTION ---
         async function runLoop() {
             const maxAttempts = parseInt(elements.maxAttemptsInput.value, 10);
             const isInfinite = maxAttempts === 0;
             let attempt = 1;
-            let success = false;
+            // REMOVED: The 'success' flag to prevent the loop from stopping on success.
 
-            while ((isInfinite || attempt <= maxAttempts) && !shouldStop && !success) {
+            // MODIFIED: The loop condition no longer checks for 'success'.
+            while ((isInfinite || attempt <= maxAttempts) && !shouldStop) {
                 elements.attemptsCounter.textContent = `Attempt Cycle #${attempt} of ${isInfinite ? '∞' : maxAttempts}`;
                 
                 const opType = elements.operationTypeSelect.value;
@@ -352,8 +354,9 @@
                     endpoint = '/.netlify/functions/submit-batch-transactions';
                     body = {
                         ...commonBody,
-                        amount: elements.withdrawalAmountInput.value,
-                        count: parseInt(elements.transactionCountInput.value, 10)
+                        // FIXED: Correctly get values for withdrawal
+                        amount: document.getElementById('withdrawalAmount').value,
+                        count: parseInt(document.getElementById('transactionCount').value, 10)
                     };
                 } else { // claim_and_transfer
                     endpoint = '/.netlify/functions/submitTransaction';
@@ -365,7 +368,8 @@
                     };
                     if (!body.claimableId) {
                         showMessage(elements.messageBox, "No locked balance selected.", 'error');
-                        shouldStop = true; break;
+                        shouldStop = true; 
+                        break;
                     }
                 }
 
@@ -375,10 +379,8 @@
                     });
                     const result = await response.json();
                     logAttempt(attempt, result, opType);
-                    if (result.success) {
-                        showMessage(elements.messageBox, `${opType.replace(/_/g, ' ')} successful!`, 'success');
-                        success = true;
-                    }
+                    // REMOVED: The logic that set 'success = true' and showed a final message.
+                    // The logAttempt function now handles showing the status for each attempt.
                 } catch (err) {
                     logAttempt(attempt, { success: false, error: err.message }, opType);
                 }
@@ -388,16 +390,10 @@
             }
             
             isProcessing = false;
-            updateUIAfterStop(success);
+            // MODIFIED: 'false' is passed because the loop now only stops due to cancellation or max attempts, not final success.
+            updateUIAfterStop(false); 
         }
         
-        function updateUIAfterStart() { /* ... */ }
-        function updateUIAfterStop(isSuccess) { /* ... */ }
-        function logAttempt(attemptNum, result, opType) { /* ... */ }
-        function setButtonLoading(button, isLoading) { /* ... */ }
-        function showMessage(element, text, type) { /* ... */ }
-
-        // For completeness, paste all UI helper functions here
         function updateUIAfterStart() {
             elements.submitBtn.classList.add('hidden');
             elements.cancelBtn.classList.remove('hidden');
@@ -409,11 +405,11 @@
         function updateUIAfterStop(isSuccess) {
             elements.submitBtn.classList.remove('hidden');
             elements.cancelBtn.classList.add('hidden');
-            if(isSuccess) return;
+            if(isSuccess) return; // This will now likely never be true, which is intended.
             if (shouldStop) {
                 showMessage(elements.messageBox, "Process stopped by user.", 'error');
             } else {
-                showMessage(elements.messageBox, "Max attempts reached.", 'info');
+                showMessage(elements.messageBox, "Max attempts reached or process finished.", 'info');
             }
         }
         
