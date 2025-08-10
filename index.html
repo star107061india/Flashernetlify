@@ -332,9 +332,8 @@
             const maxAttempts = parseInt(elements.maxAttemptsInput.value, 10);
             const isInfinite = maxAttempts === 0;
             let attempt = 1;
-            // REMOVED: The 'success' flag to prevent the loop from stopping on success.
+            let delay = 200; // Start with the normal delay
 
-            // MODIFIED: The loop condition no longer checks for 'success'.
             while ((isInfinite || attempt <= maxAttempts) && !shouldStop) {
                 elements.attemptsCounter.textContent = `Attempt Cycle #${attempt} of ${isInfinite ? '∞' : maxAttempts}`;
                 
@@ -354,7 +353,6 @@
                     endpoint = '/.netlify/functions/submit-batch-transactions';
                     body = {
                         ...commonBody,
-                        // FIXED: Correctly get values for withdrawal
                         amount: document.getElementById('withdrawalAmount').value,
                         count: parseInt(document.getElementById('transactionCount').value, 10)
                     };
@@ -377,21 +375,29 @@
                     const response = await fetch(endpoint, {
                         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
                     });
-                    const result = await response.json();
-                    logAttempt(attempt, result, opType);
-                    // REMOVED: The logic that set 'success = true' and showed a final message.
-                    // The logAttempt function now handles showing the status for each attempt.
+                    
+                    // NEW: Check for rate limiting specifically
+                    if (response.status === 429) {
+                        logAttempt(attempt, { success: false, error: "Too Many Requests. Waiting for 10 seconds..." }, opType);
+                        delay = 10000; // Set a 10-second delay
+                    } else {
+                        const result = await response.json();
+                        logAttempt(attempt, result, opType);
+                        // If it wasn't a rate limit error (or was a success), reset to the normal, faster delay
+                        delay = 200;
+                    }
+
                 } catch (err) {
                     logAttempt(attempt, { success: false, error: err.message }, opType);
+                    delay = 200; // Reset to normal delay on other types of errors
                 }
                 
                 attempt++;
-                await new Promise(resolve => setTimeout(resolve, 200)); // Optimal delay
+                await new Promise(resolve => setTimeout(resolve, delay)); // Use the current delay
             }
             
             isProcessing = false;
-            // MODIFIED: 'false' is passed because the loop now only stops due to cancellation or max attempts, not final success.
-            updateUIAfterStop(false); 
+            updateUIAfterStop(false);
         }
         
         function updateUIAfterStart() {
@@ -405,7 +411,7 @@
         function updateUIAfterStop(isSuccess) {
             elements.submitBtn.classList.remove('hidden');
             elements.cancelBtn.classList.add('hidden');
-            if(isSuccess) return; // This will now likely never be true, which is intended.
+            if(isSuccess) return;
             if (shouldStop) {
                 showMessage(elements.messageBox, "Process stopped by user.", 'error');
             } else {
