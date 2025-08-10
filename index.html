@@ -350,7 +350,7 @@
                 };
                 
                 if (opType === 'withdrawal') {
-                    endpoint = '/.netlify/functions/submit-batch-transactions';
+                    endpoint = '/.netlify/functions/submitTransaction';
                     body = {
                         ...commonBody,
                         amount: document.getElementById('withdrawalAmount').value,
