@@ -1,4 +1,4 @@
-// File: netlify/functions/submitTransaction.js (Optimized for Speed)
+// File: netlify/functions/submitTransaction.js (FIXED)
 
 const { Keypair, Horizon, Operation, TransactionBuilder, Asset } = require('stellar-sdk');
 const { mnemonicToSeedSync } = require('bip39');
@@ -6,7 +6,7 @@ const { derivePath } = require('ed25519-hd-key');
 const axios = require('axios');
 
 const server = new Horizon.Server("https://api.mainnet.minepi.com", {
-    httpClient: axios.create({ timeout: 30000 }) // टाइमआउट 30 सेकंड
+    httpClient: axios.create({ timeout: 30000 })
 });
 
 const createKeypairFromMnemonic = (mnemonic) => {
@@ -34,34 +34,31 @@ exports.handler = async (event) => {
         const feeSourceKeypair = sponsorKeypair || senderKeypair;
         const accountToLoad = await server.loadAccount(feeSourceKeypair.publicKey());
         
-        // --- Speed Optimization Logic ---
         let recordsPerAttempt = parseInt(params.recordsPerAttempt, 10) || 1;
         if (recordsPerAttempt < 1) recordsPerAttempt = 1;
-        // कुल ऑपरेशन की संख्या = (1 क्लेम + 1 पेमेंट) * रिकॉर्ड्स की संख्या
-        const totalOperations = 2 * recordsPerAttempt;
 
-        let fee;
+        // --- CORRECTED FEE LOGIC ---
+        // The `fee` parameter for TransactionBuilder is the MAX FEE PER OPERATION.
+        let feePerOperation;
         if (params.feeMechanism === 'CUSTOM' && params.customFee) {
-            // 1. कस्टम फीस का उपयोग करें
-            fee = params.customFee;
+            // If custom fee is provided, it's the TOTAL fee. We divide it by the number of operations.
+            const totalOperations = 2 * recordsPerAttempt;
+            feePerOperation = Math.ceil(parseInt(params.customFee, 10) / totalOperations).toString();
         } else {
             const baseFee = await server.fetchBaseFee();
             if (params.feeMechanism === 'SPEED_HIGH') {
-                // 2. स्पीड के लिए 10 गुना फीस
-                fee = (baseFee * 10 * totalOperations).toString();
+                feePerOperation = (baseFee * 10).toString(); // 10x base fee PER OPERATION
             } else { // AUTOMATIC
-                // 3. स्वचालित सामान्य फीस
-                fee = (baseFee * totalOperations).toString();
+                feePerOperation = baseFee.toString(); // Base fee PER OPERATION
             }
         }
-        // --- End of Speed Optimization Logic ---
+        // --- END OF FEE LOGIC CORRECTION ---
 
         const txBuilder = new TransactionBuilder(accountToLoad, {
-            fee, // यहाँ ऑप्टिमाइज़ की गई फीस का उपयोग किया जा रहा है
+            fee: feePerOperation, // Use the corrected PER-OPERATION fee here
             networkPassphrase: "Pi Network",
         });
         
-        // एक ही ट्रांजैक्शन में कई ऑपरेशन जोड़ें
         for (let i = 0; i < recordsPerAttempt; i++) {
              txBuilder.addOperation(Operation.claimClaimableBalance({
                 balanceId: params.claimableId,
@@ -85,11 +82,7 @@ exports.handler = async (event) => {
         
         const result = await server.submitTransaction(transaction);
 
-        if (result && result.hash) {
-             return { statusCode: 200, body: JSON.stringify({ success: true, response: result }) };
-        } else {
-            throw new Error("Transaction was submitted but no hash was returned.");
-        }
+        return { statusCode: 200, body: JSON.stringify({ success: true, response: result }) };
 
     } catch (error) {
         console.error("Error in submitTransaction:", error);
@@ -100,13 +93,13 @@ exports.handler = async (event) => {
         } else if (error.response?.status === 404) {
             detailedError = "The sender or sponsor account was not found on the Pi network.";
         } else if (error.message.toLowerCase().includes('timeout')) {
-            detailedError = "Request to Pi network timed out. The network may be busy. Please try again.";
+            detailedError = "Request to Pi network timed out. The network may be busy.";
         } else {
             detailedError = error.message;
         }
 
         return {
-            statusCode: 500, // सर्वर एरर के लिए 500 कोड बेहतर है
+            statusCode: 500,
             body: JSON.stringify({ success: false, error: detailedError })
         };
     }
