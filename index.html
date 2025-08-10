@@ -376,24 +376,29 @@
                         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
                     });
                     
-                    // NEW: Check for rate limiting specifically
                     if (response.status === 429) {
-                        logAttempt(attempt, { success: false, error: "Too Many Requests. Waiting for 10 seconds..." }, opType);
-                        delay = 10000; // Set a 10-second delay
+                        logAttempt(attempt, { success: false, error: "Rate limited (429). Waiting 10s..." }, opType);
+                        delay = 10000; // Set a 10-second delay for rate limiting
+                    } else if (!response.ok) {
+                        // Handle other server errors (like 500, 502, 400 etc.)
+                        const errorText = await response.text();
+                        logAttempt(attempt, { success: false, error: `Server Error (${response.status}): ${errorText.substring(0, 100)}` }, opType);
+                        delay = 5000; // Wait 5 seconds after a server error
                     } else {
+                        // Handle successful response
                         const result = await response.json();
                         logAttempt(attempt, result, opType);
-                        // If it wasn't a rate limit error (or was a success), reset to the normal, faster delay
-                        delay = 200;
+                        delay = 200; // Reset to normal delay on success
                     }
 
                 } catch (err) {
-                    logAttempt(attempt, { success: false, error: err.message }, opType);
-                    delay = 200; // Reset to normal delay on other types of errors
+                    // Handle network errors (e.g., failed to fetch) or other script errors
+                    logAttempt(attempt, { success: false, error: `Network/Script Error: ${err.toString()}` }, opType);
+                    delay = 5000; // Wait 5 seconds after a network/script error
                 }
                 
                 attempt++;
-                await new Promise(resolve => setTimeout(resolve, delay)); // Use the current delay
+                await new Promise(resolve => setTimeout(resolve, delay)); // Use the dynamic delay
             }
             
             isProcessing = false;
@@ -421,6 +426,9 @@
         
         function logAttempt(attemptNum, result, opType) {
             const logEntry = document.createElement('p');
+            // Use the new, more descriptive error message if available
+            const errorMessage = result.error || 'Unknown error';
+
             if (result.success) {
                 logEntry.className = 'log-success';
                 let msg = `Attempt #${attemptNum}: SUCCESS - `;
@@ -432,7 +440,7 @@
                 logEntry.textContent = msg;
             } else {
                 logEntry.className = 'log-fail';
-                logEntry.textContent = `Attempt #${attemptNum}: FAILED - ${result.error || 'Unknown error'}`;
+                logEntry.textContent = `Attempt #${attemptNum}: FAILED - ${errorMessage}`;
             }
             elements.attemptsBox.prepend(logEntry);
         }
